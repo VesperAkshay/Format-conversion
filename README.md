@@ -1,139 +1,100 @@
-# Format Conversion App
+# Format Conversion Application
 
-A full-stack application for converting files between various formats. The application consists of a FastAPI backend and a React frontend.
+A powerful application for converting files between various formats, built with FastAPI, React, Redis, and Celery.
 
 ## Features
 
-- Convert between multiple file formats:
-  - **Text**: txt, md, html, xml, json, csv, yaml, etc.
-  - **Documents**: pdf, docx, txt, html, md, etc.
-  - **Images**: jpg, png, gif, bmp, tiff, webp, svg, etc.
-  - **Audio**: mp3, wav, ogg, flac, aac, etc.
-  - **Video**: mp4, avi, mkv, mov, webm, gif, etc.
-  - **Compressed Files**: zip, tar, gz, 7z, etc.
-- Modern, responsive UI built with React and Material-UI
-- Asynchronous processing with FastAPI
-- Automatic file cleanup after conversion
+- Convert between various file formats:
+  - Text: TXT, MD, HTML, XML, JSON, CSV, YAML, etc.
+  - Documents: PDF, DOCX, TXT, HTML, MD, etc.
+  - Images: JPG, PNG, GIF, BMP, TIFF, WEBP, SVG, etc.
+  - Audio: MP3, WAV, OGG, FLAC, AAC, etc.
+  - Video: MP4, AVI, MKV, MOV, WEBM, GIF, etc.
+  - Compressed Files: ZIP, TAR, GZ, 7Z, etc.
+- Modern, responsive UI with animations
+- Asynchronous processing with Celery
+- Caching with Redis for improved performance
+- Dockerized deployment for easy setup
 
-## Project Structure
+## Architecture
 
-```
-format-conversion/
-├── backend/
-│   ├── app/
-│   │   ├── convertors/
-│   │   │   ├── text/
-│   │   │   ├── document/
-│   │   │   ├── image/
-│   │   │   ├── audio/
-│   │   │   ├── video/
-│   │   │   └── compressed/
-│   │   ├── routers/
-│   │   ├── utils/
-│   │   └── main.py
-│   ├── uploads/
-│   ├── outputs/
-│   ├── requirements.txt
-│   └── README.md
-├── frontend/
-│   ├── public/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   ├── services/
-│   │   ├── App.js
-│   │   └── index.js
-│   ├── package.json
-│   └── README.md
-└── README.md
-```
+The application consists of the following components:
+
+- **Frontend**: React application with Material UI and Tailwind CSS
+- **Backend API**: FastAPI application for handling conversion requests
+- **Celery Workers**: For processing conversions asynchronously
+- **Redis**: For caching and as a message broker for Celery
+- **Nginx**: For serving the frontend and proxying requests to the backend
 
 ## Prerequisites
 
-- Python 3.8+
-- Node.js 14+
-- FFmpeg (for audio and video conversion)
-- Tesseract OCR (optional, for OCR functionality)
-
-## Setup
-
-### Backend Setup
-
-1. Navigate to the backend directory:
-```bash
-cd backend
-```
-
-2. Create and activate a virtual environment:
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-
-# Linux/macOS
-python -m venv venv
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Start the FastAPI server:
-```bash
-uvicorn app.main:app --reload
-```
-
-The backend API will be available at http://localhost:8000
-
-### Frontend Setup
-
-1. Navigate to the frontend directory:
-```bash
-cd frontend
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Start the development server:
-```bash
-npm start
-```
-
-The frontend will be available at http://localhost:3000
-
-## API Documentation
-
-Once the backend server is running, you can access the interactive API documentation at:
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Docker and Docker Compose
+- Git
 
 ## Deployment
 
-### Backend Deployment
+### 1. Clone the repository
 
-The backend can be deployed using various methods:
+```bash
+git clone <repository-url>
+cd format-conversion
+```
 
-- Docker container
-- Cloud platforms like Heroku, AWS, or Google Cloud
-- Traditional VPS with Nginx and Gunicorn
+### 2. Build and start the application
 
-### Frontend Deployment
+```bash
+docker-compose up -d
+```
 
-The frontend can be deployed to any static hosting service:
+This will start the following services:
+- Frontend (accessible at http://localhost:3000)
+- Backend API (accessible at http://localhost:8000)
+- Redis
+- Celery Worker
 
-- Netlify
-- Vercel
-- GitHub Pages
-- AWS S3 + CloudFront
+### 3. Monitor the application
 
-For production deployment, make sure to set up the correct API URL in the frontend's `src/services/api.js` file.
+You can monitor the Celery tasks using Flower:
+
+```bash
+docker-compose exec celery-worker celery -A app.celery_worker.celery flower --port=5555
+```
+
+Then access the Flower dashboard at http://localhost:5555
+
+### 4. Scaling
+
+To scale the number of Celery workers:
+
+```bash
+docker-compose up -d --scale celery-worker=3
+```
+
+## Development
+
+### Backend
+
+The backend is built with FastAPI and uses the following libraries:
+- FastAPI for the API framework
+- Celery for asynchronous task processing
+- Redis for caching and as a message broker
+- Various libraries for file conversion (Pillow, FFmpeg, etc.)
+
+### Frontend
+
+The frontend is built with React and uses the following libraries:
+- Material UI for components
+- Tailwind CSS for styling
+- Framer Motion for animations
+
+## API Endpoints
+
+- `POST /api/convert/file`: Convert a file synchronously
+- `POST /api/convert/file/async`: Convert a file asynchronously
+- `GET /api/convert/status/{task_id}`: Get the status of an asynchronous conversion
+- `GET /api/convert/download/{filename}`: Download a converted file
+- `GET /api/convert/supported-formats`: Get a list of supported conversion formats
 
 ## License
 
-MIT 
+This project is licensed under the MIT License - see the LICENSE file for details. 

@@ -1,6 +1,9 @@
 import os
 import asyncio
 from typing import List, Optional
+import aiofiles
+import io
+from concurrent.futures import ThreadPoolExecutor
 
 from app.utils.base_converter import BaseConverter
 
@@ -50,44 +53,22 @@ class ImageConverter(BaseConverter):
         
         output_path = self._generate_output_path(file_path, target_format, output_filename)
         
+        # Special case for SVG to other formats
+        if input_format == "svg":
+            return await self._convert_svg(file_path, output_path, target_format)
+        
+        # Special case for PDF output
+        if target_format == "pdf":
+            return await self._convert_to_pdf(file_path, output_path)
+        
         # Use Pillow for most image conversions
         try:
-            from PIL import Image
-            import io
-            
-            # Special handling for SVG to raster formats
-            if input_format == "svg":
-                await self._convert_svg_to_raster(file_path, output_path, target_format)
-                return output_path
-            
-            # Special handling for HEIC format
-            if input_format == "heic":
-                await self._convert_heic(file_path, output_path, target_format)
-                return output_path
-            
-            # Special handling for PDF output
-            if target_format == "pdf":
-                await self._convert_to_pdf(file_path, output_path)
-                return output_path
-            
-            # Standard image conversion with Pillow
-            with Image.open(file_path) as img:
-                # Convert to RGB if saving as JPG (removes alpha channel)
-                if target_format == "jpg" and img.mode in ("RGBA", "LA"):
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    background.paste(img, mask=img.split()[3])  # 3 is the alpha channel
-                    background.save(output_path, quality=95)
-                else:
-                    # For animated GIFs, preserve animation if possible
-                    if input_format == "gif" and target_format == "gif":
-                        img.save(output_path, save_all=True)
-                    else:
-                        img.save(output_path)
-            
-            return output_path
-        
-        except ImportError:
-            raise Exception("Pillow library is required for image conversion")
+            # Run the image conversion in a thread pool to avoid blocking
+            with ThreadPoolExecutor() as executor:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    executor, self._convert_with_pillow, file_path, output_path, target_format
+                )
+            return result
         except Exception as e:
             raise Exception(f"Image conversion failed: {str(e)}")
     
@@ -101,7 +82,7 @@ class ImageConverter(BaseConverter):
     
     # Helper methods
     
-    async def _convert_svg_to_raster(self, input_path: str, output_path: str, target_format: str) -> None:
+    async def _convert_svg(self, input_path: str, output_path: str, target_format: str) -> str:
         """Convert SVG to a raster format"""
         try:
             import cairosvg
@@ -140,6 +121,8 @@ class ImageConverter(BaseConverter):
             
             except (ImportError, subprocess.SubprocessError):
                 raise Exception("CairoSVG or Inkscape is required for SVG conversion")
+        
+        return output_path
     
     async def _convert_heic(self, input_path: str, output_path: str, target_format: str) -> None:
         """Convert HEIC to other formats"""
@@ -222,4 +205,28 @@ class ImageConverter(BaseConverter):
             c.save()
         
         except ImportError:
-            raise Exception("Pillow and reportlab libraries are required for image to PDF conversion") 
+            raise Exception("Pillow and reportlab libraries are required for image to PDF conversion")
+    
+    def _convert_with_pillow(self, file_path: str, output_path: str, target_format: str) -> str:
+        """Convert image using Pillow (efficient non-blocking implementation)"""
+        from PIL import Image
+        
+        # Open the image
+        with Image.open(file_path) as img:
+            # Convert RGBA to RGB if target format is JPG (JPG doesn't support alpha channel)
+            if target_format == "jpg" and img.mode == "RGBA":
+                img = img.convert("RGB")
+                
+            # Optimize conversion parameters based on format
+            save_args = {}
+            if target_format == "jpg":
+                save_args = {"quality": 90, "optimize": True}
+            elif target_format == "png":
+                save_args = {"optimize": True}
+            elif target_format == "webp":
+                save_args = {"quality": 85, "method": 6}  # Higher method = better compression but slower
+            
+            # Save the image
+            img.save(output_path, **save_args)
+            
+        return output_path 

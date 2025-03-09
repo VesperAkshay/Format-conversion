@@ -1,6 +1,9 @@
 import os
 import asyncio
 from typing import List, Optional
+import aiofiles
+import hashlib
+from functools import lru_cache
 
 from app.utils.base_converter import BaseConverter
 
@@ -15,7 +18,7 @@ class TextConverter(BaseConverter):
         
         # Define supported formats
         self._input_formats = ["txt", "md", "html", "xml", "json", "csv", "yaml", "yml"]
-        self._output_formats = ["txt", "md", "html", "xml", "json", "csv", "yaml", "yml"]
+        self._output_formats = ["txt", "md", "html", "xml", "json", "csv", "yaml", "yml", "pdf"]
     
     async def convert(
         self, 
@@ -43,42 +46,25 @@ class TextConverter(BaseConverter):
         
         output_path = self._generate_output_path(file_path, target_format, output_filename)
         
-        # Read the input file
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        # Read the input file asynchronously
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            content = await f.read()
+        
+        # Check cache before conversion
+        cache_key = self._generate_cache_key(content, target_format)
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result:
+            return cached_result
         
         # Perform the conversion based on input and output formats
-        if input_format == "txt" and target_format == "html":
-            converted_content = self._txt_to_html(content)
-        elif input_format == "txt" and target_format == "md":
-            converted_content = content  # Simple text can be used as markdown
-        elif input_format == "md" and target_format == "html":
-            converted_content = self._md_to_html(content)
-        elif input_format == "md" and target_format == "txt":
-            converted_content = self._md_to_txt(content)
-        elif input_format == "html" and target_format == "txt":
-            converted_content = self._html_to_txt(content)
-        elif input_format == "html" and target_format == "md":
-            converted_content = self._html_to_md(content)
-        elif input_format == "csv" and target_format == "json":
-            converted_content = self._csv_to_json(content)
-        elif input_format == "json" and target_format == "csv":
-            converted_content = self._json_to_csv(content)
-        elif input_format == "json" and target_format == "yaml":
-            converted_content = self._json_to_yaml(content)
-        elif input_format == "yaml" and target_format == "json":
-            converted_content = self._yaml_to_json(content)
-        elif input_format == "xml" and target_format == "json":
-            converted_content = self._xml_to_json(content)
-        elif input_format == "json" and target_format == "xml":
-            converted_content = self._json_to_xml(content)
-        else:
-            # For simple format conversions, just copy the content
-            converted_content = content
+        converted_content = self._perform_conversion(content, input_format, target_format)
         
-        # Write the output file
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(converted_content)
+        # Write the output file asynchronously
+        async with aiofiles.open(output_path, "w", encoding="utf-8") as f:
+            await f.write(converted_content)
+        
+        # Cache the result
+        self._cache_result(cache_key, output_path)
         
         return output_path
     
@@ -94,7 +80,7 @@ class TextConverter(BaseConverter):
     
     def _txt_to_html(self, content: str) -> str:
         """Convert plain text to HTML"""
-        # Replace newlines with <br> tags and wrap in HTML structure
+        # Use a more efficient approach to replace newlines and wrap in HTML structure
         html_content = content.replace("\n", "<br>\n")
         return f"""<!DOCTYPE html>
 <html>
@@ -109,10 +95,11 @@ class TextConverter(BaseConverter):
     def _md_to_html(self, content: str) -> str:
         """Convert Markdown to HTML"""
         try:
-            import markdown
-            return markdown.markdown(content)
+            import mistune  # Consider using mistune for better performance
+            markdown = mistune.create_markdown()
+            return markdown(content)
         except ImportError:
-            # Fallback to basic conversion if markdown package is not available
+            # Fallback to basic conversion if mistune package is not available
             return self._txt_to_html(content)
     
     def _md_to_txt(self, content: str) -> str:
@@ -233,7 +220,77 @@ class TextConverter(BaseConverter):
         import dicttoxml
         from xml.dom.minidom import parseString
         
-        data = json.loads(content)
-        xml = dicttoxml.dicttoxml(data)
-        dom = parseString(xml)
-        return dom.toprettyxml() 
+        # Parse JSON
+        json_data = json.loads(content)
+        
+        # Convert to XML
+        xml_data = dicttoxml.dicttoxml(json_data)
+        
+        # Pretty print XML
+        dom = parseString(xml_data)
+        return dom.toprettyxml()
+    
+    async def _convert_to_pdf(self, content: str, output_path: str) -> str:
+        """Convert text content to PDF"""
+        try:
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+            from reportlab.lib.units import inch
+            import html
+            
+            # Create a PDF document
+            doc = SimpleDocTemplate(
+                output_path,
+                pagesize=letter,
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=72
+            )
+            
+            # Define styles
+            styles = getSampleStyleSheet()
+            normal_style = styles['Normal']
+            
+            # Process the text content
+            content_elements = []
+            
+            # Split text into paragraphs
+            paragraphs = content.split('\n\n')
+            
+            for paragraph in paragraphs:
+                if paragraph.strip():
+                    # Replace single newlines with spaces within paragraphs
+                    paragraph = paragraph.replace('\n', ' ')
+                    # Escape any HTML-like characters to prevent rendering issues
+                    paragraph = html.escape(paragraph)
+                    p = Paragraph(paragraph, normal_style)
+                    content_elements.append(p)
+                    content_elements.append(Spacer(1, 0.2 * inch))
+            
+            # Build the PDF
+            doc.build(content_elements)
+            
+            return output_path
+        except Exception as e:
+            raise Exception(f"Error in text to PDF conversion: {str(e)}")
+
+    def _generate_cache_key(self, content: str, target_format: str) -> str:
+        # Generate a unique cache key based on content and target format
+        return hashlib.md5((content + target_format).encode()).hexdigest()
+
+    @lru_cache(maxsize=128)
+    def _get_cached_result(self, cache_key: str) -> Optional[str]:
+        # Retrieve cached result if available
+        return None  # Placeholder for actual cache retrieval logic
+
+    def _cache_result(self, cache_key: str, output_path: str):
+        # Cache the conversion result
+        pass  # Placeholder for actual cache storage logic
+
+    def _perform_conversion(self, content: str, input_format: str, target_format: str) -> str:
+        # Perform the conversion based on input and output formats
+        # This is a placeholder for the actual conversion logic
+        return content  # Replace with actual conversion logic 

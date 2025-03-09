@@ -61,10 +61,14 @@ class DocumentConverter(BaseConverter):
             await self._txt_to_pdf(file_path, output_path)
         elif input_format == "txt" and target_format == "docx":
             await self._txt_to_docx(file_path, output_path)
+        elif input_format == "txt" and target_format == "html":
+            await self._txt_to_html(file_path, output_path)
         elif input_format == "html" and target_format == "pdf":
             await self._html_to_pdf(file_path, output_path)
         elif input_format == "html" and target_format == "docx":
             await self._html_to_docx(file_path, output_path)
+        elif input_format == "html" and target_format == "txt":
+            await self._html_to_txt(file_path, output_path)
         elif input_format == "md" and target_format == "pdf":
             await self._md_to_pdf(file_path, output_path)
         elif input_format == "md" and target_format == "docx":
@@ -190,38 +194,50 @@ class DocumentConverter(BaseConverter):
         try:
             from reportlab.pdfgen import canvas
             from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+            from reportlab.lib.units import inch
+            import html
             
-            with open(input_path, 'r', encoding='utf-8') as file:
+            # Read the text file
+            with open(input_path, 'r', encoding='utf-8', errors='replace') as file:
                 text = file.read()
             
-            c = canvas.Canvas(output_path, pagesize=letter)
-            width, height = letter
+            # Create a PDF document
+            doc = SimpleDocTemplate(
+                output_path,
+                pagesize=letter,
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=72
+            )
             
-            # Split text into lines
-            lines = text.split('\n')
+            # Define styles
+            styles = getSampleStyleSheet()
+            normal_style = styles['Normal']
             
-            # Set font and size
-            c.setFont("Helvetica", 12)
+            # Process the text content
+            content = []
             
-            # Calculate line height
-            line_height = 14
+            # Split text into paragraphs
+            paragraphs = text.split('\n\n')
             
-            # Start position
-            y = height - 50
+            for paragraph in paragraphs:
+                if paragraph.strip():
+                    # Replace single newlines with spaces within paragraphs
+                    paragraph = paragraph.replace('\n', ' ')
+                    # Escape any HTML-like characters to prevent rendering issues
+                    paragraph = html.escape(paragraph)
+                    p = Paragraph(paragraph, normal_style)
+                    content.append(p)
+                    content.append(Spacer(1, 0.2 * inch))
             
-            # Add lines to PDF
-            for line in lines:
-                if y < 50:  # Check if we need a new page
-                    c.showPage()
-                    y = height - 50
-                    c.setFont("Helvetica", 12)
-                
-                c.drawString(50, y, line)
-                y -= line_height
+            # Build the PDF
+            doc.build(content)
             
-            c.save()
-        except ImportError:
-            raise Exception("reportlab library is required for TXT to PDF conversion")
+        except Exception as e:
+            raise Exception(f"Error in TXT to PDF conversion: {str(e)}")
     
     async def _txt_to_docx(self, input_path: str, output_path: str) -> None:
         """Convert TXT to DOCX"""
@@ -244,6 +260,22 @@ class DocumentConverter(BaseConverter):
             doc.save(output_path)
         except ImportError:
             raise Exception("python-docx library is required for TXT to DOCX conversion")
+    
+    async def _txt_to_html(self, input_path: str, output_path: str) -> None:
+        """Convert TXT to HTML"""
+        try:
+            from bs4 import BeautifulSoup
+            
+            with open(input_path, 'r', encoding='utf-8') as file:
+                text = file.read()
+            
+            soup = BeautifulSoup(text, 'html.parser')
+            html_content = soup.get_text()
+            
+            with open(output_path, 'w', encoding='utf-8') as file:
+                file.write(html_content)
+        except ImportError:
+            raise Exception("BeautifulSoup library is required for TXT to HTML conversion")
     
     async def _html_to_pdf(self, input_path: str, output_path: str) -> None:
         """Convert HTML to PDF"""
@@ -318,6 +350,22 @@ class DocumentConverter(BaseConverter):
             doc.save(output_path)
         except ImportError:
             raise Exception("BeautifulSoup and python-docx libraries are required for HTML to DOCX conversion")
+    
+    async def _html_to_txt(self, input_path: str, output_path: str) -> None:
+        """Convert HTML to TXT"""
+        try:
+            from bs4 import BeautifulSoup
+            
+            with open(input_path, 'r', encoding='utf-8') as file:
+                html_content = file.read()
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            text = soup.get_text()
+            
+            with open(output_path, 'w', encoding='utf-8') as file:
+                file.write(text)
+        except ImportError:
+            raise Exception("BeautifulSoup library is required for HTML to TXT conversion")
     
     async def _md_to_pdf(self, input_path: str, output_path: str) -> None:
         """Convert Markdown to PDF"""

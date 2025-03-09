@@ -1,11 +1,17 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 import os
 import uuid
 import shutil
-from typing import Optional, List
+import asyncio
+from typing import Optional, List, Dict, Any, Callable
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future
+import aiofiles
+import time
+import hashlib
 
 from app.utils.conversion_handler import ConversionHandler
+from app.tasks import convert_file_task, cleanup_old_files
 
 router = APIRouter(
     prefix="/api/convert",
@@ -15,8 +21,15 @@ router = APIRouter(
 # Initialize the conversion handler
 conversion_handler = ConversionHandler()
 
+# In-memory cache for conversion results
+conversion_cache: Dict[str, str] = {}
+
+# Track active conversions to prevent duplicates
+active_conversions: Dict[str, Future] = {}
+
 @router.post("/file")
 async def convert_file(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     target_format: str = Form(...),
@@ -44,16 +57,57 @@ async def convert_file(
     
     file_location = os.path.join(upload_folder, f"{filename_without_ext}_{unique_id}{os.path.splitext(original_filename)[1]}")
     
-    with open(file_location, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Generate a cache key for this conversion
+    file_content = await file.read(1024 * 1024)  # Read first MB for hash
+    await file.seek(0)  # Reset file position
+    
+    hash_obj = hashlib.md5()
+    hash_obj.update(file_content)
+    hash_obj.update(target_format.encode())
+    hash_obj.update(conversion_type.encode())
+    cache_key = hash_obj.hexdigest()
+    
+    # Check Redis cache
+    redis_client = request.app.state.redis
+    cached_result = redis_client.get(f"conversion:{cache_key}")
+    
+    if cached_result:
+        cached_path = cached_result.decode('utf-8')
+        if os.path.exists(cached_path):
+            return {
+                "success": True,
+                "message": "File converted successfully (cached)",
+                "file_path": cached_path,
+                "download_url": f"/outputs/{os.path.basename(cached_path)}"
+            }
+    
+    # Save the uploaded file asynchronously
+    async with aiofiles.open(file_location, "wb") as buffer:
+        # Use chunks to handle large files efficiently
+        chunk_size = 1024 * 1024  # 1MB chunks
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            await buffer.write(chunk)
     
     try:
-        # Process the conversion
-        output_path = await conversion_handler.convert_file(
+        # Submit the conversion task to Celery
+        task = convert_file_task.delay(
             file_path=file_location,
             target_format=target_format,
             conversion_type=conversion_type,
             output_filename=f"{filename_without_ext}_{unique_id}"
+        )
+        
+        # Wait for the task to complete (with a timeout)
+        output_path = task.get(timeout=300)  # 5 minutes timeout
+        
+        # Cache the result in Redis
+        redis_client.setex(
+            f"conversion:{cache_key}",
+            3600 * 24,  # 24 hours expiration
+            output_path
         )
         
         # Schedule file cleanup after response is sent
@@ -74,6 +128,123 @@ async def convert_file(
         raise HTTPException(
             status_code=500,
             detail=f"Conversion failed: {str(e)}"
+        )
+
+@router.post("/file/async")
+async def convert_file_async(
+    request: Request,
+    file: UploadFile = File(...),
+    target_format: str = Form(...),
+    conversion_type: str = Form(...),
+):
+    """
+    Convert a file asynchronously and return a task ID.
+    
+    Args:
+        file: The file to convert
+        target_format: The format to convert to (e.g., 'pdf', 'docx', 'jpg')
+        conversion_type: The type of conversion ('text', 'document', 'image', 'audio', 'video', 'compressed')
+    
+    Returns:
+        A JSON response with the task ID
+    """
+    # Generate a unique filename to avoid collisions
+    original_filename = file.filename
+    filename_without_ext = os.path.splitext(original_filename)[0]
+    unique_id = str(uuid.uuid4())
+    
+    # Save the uploaded file
+    upload_folder = os.path.join("uploads", conversion_type)
+    os.makedirs(upload_folder, exist_ok=True)
+    
+    file_location = os.path.join(upload_folder, f"{filename_without_ext}_{unique_id}{os.path.splitext(original_filename)[1]}")
+    
+    # Save the uploaded file asynchronously
+    async with aiofiles.open(file_location, "wb") as buffer:
+        # Use chunks to handle large files efficiently
+        chunk_size = 1024 * 1024  # 1MB chunks
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            await buffer.write(chunk)
+    
+    try:
+        # Submit the conversion task to Celery
+        task = convert_file_task.delay(
+            file_path=file_location,
+            target_format=target_format,
+            conversion_type=conversion_type,
+            output_filename=f"{filename_without_ext}_{unique_id}"
+        )
+        
+        return {
+            "success": True,
+            "message": "Conversion task submitted",
+            "task_id": task.id,
+            "status_url": f"/api/convert/status/{task.id}"
+        }
+    
+    except Exception as e:
+        # Clean up the uploaded file if task submission fails
+        if os.path.exists(file_location):
+            os.remove(file_location)
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit conversion task: {str(e)}"
+        )
+
+@router.get("/status/{task_id}")
+async def get_task_status(request: Request, task_id: str):
+    """
+    Get the status of a conversion task.
+    
+    Args:
+        task_id: The ID of the task to check
+    
+    Returns:
+        A JSON response with the task status
+    """
+    try:
+        # Get the task result from Celery
+        task = convert_file_task.AsyncResult(task_id)
+        
+        if task.state == 'PENDING':
+            response = {
+                'status': 'pending',
+                'message': 'Task is pending'
+            }
+        elif task.state == 'STARTED':
+            response = {
+                'status': 'started',
+                'message': 'Task has started'
+            }
+        elif task.state == 'SUCCESS':
+            output_path = task.result
+            response = {
+                'status': 'success',
+                'message': 'Task completed successfully',
+                'file_path': output_path,
+                'download_url': f"/outputs/{os.path.basename(output_path)}"
+            }
+        elif task.state == 'FAILURE':
+            response = {
+                'status': 'failure',
+                'message': str(task.result)
+            }
+        else:
+            response = {
+                'status': task.state,
+                'message': 'Unknown state'
+            }
+        
+        return response
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get task status: {str(e)}"
         )
 
 @router.get("/download/{filename}")

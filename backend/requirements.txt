@@ -27,3 +27,8 @@ dicttoxml==1.7.16
 pdfkit==1.0.0
 reportlab==4.0.7
 cairosvg==2.7.1
+mistune==3.0.1
+redis==5.0.1
+celery==5.3.4
+flower==2.0.1
+watchdog==3.0.0

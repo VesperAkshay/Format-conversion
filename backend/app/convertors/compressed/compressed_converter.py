@@ -5,6 +5,8 @@ import shutil
 import tempfile
 import asyncio
 from typing import List, Optional
+import aiofiles
+from concurrent.futures import ThreadPoolExecutor
 
 from app.utils.base_converter import BaseConverter
 
@@ -50,15 +52,22 @@ class CompressedConverter(BaseConverter):
         # Create a temporary directory to extract files
         with tempfile.TemporaryDirectory() as temp_dir:
             # Extract the input file
-            extract_dir = os.path.join(temp_dir, "extracted")
-            os.makedirs(extract_dir, exist_ok=True)
-            
-            await self._extract_archive(file_path, extract_dir, input_format)
-            
-            # Create the output archive
-            await self._create_archive(extract_dir, output_path, target_format)
-        
-        return output_path
+            try:
+                # Run the extraction in a thread pool to avoid blocking
+                with ThreadPoolExecutor() as executor:
+                    await asyncio.get_event_loop().run_in_executor(
+                        executor, self._extract_archive, file_path, temp_dir, input_format
+                    )
+                
+                # Create the output archive
+                with ThreadPoolExecutor() as executor:
+                    await asyncio.get_event_loop().run_in_executor(
+                        executor, self._create_archive, temp_dir, output_path, target_format
+                    )
+                
+                return output_path
+            except Exception as e:
+                raise Exception(f"Compression conversion failed: {str(e)}")
     
     def get_supported_input_formats(self) -> List[str]:
         """Get a list of supported input formats"""
@@ -70,103 +79,55 @@ class CompressedConverter(BaseConverter):
     
     # Helper methods
     
-    async def _extract_archive(self, archive_path: str, extract_dir: str, archive_format: str) -> None:
-        """Extract an archive to a directory"""
-        if archive_format == "zip":
-            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+    def _extract_archive(self, file_path: str, extract_dir: str, format: str) -> None:
+        """Extract an archive to a directory (efficient non-blocking implementation)"""
+        if format == "zip":
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
-        
-        elif archive_format in ["tar", "gz", "bz2", "xz"]:
-            # Handle tar and compressed tar formats
+        elif format in ["tar", "gz", "bz2", "xz"]:
             mode = "r"
-            if archive_format == "gz":
+            if format == "gz":
                 mode = "r:gz"
-            elif archive_format == "bz2":
+            elif format == "bz2":
                 mode = "r:bz2"
-            elif archive_format == "xz":
+            elif format == "xz":
                 mode = "r:xz"
-            
-            with tarfile.open(archive_path, mode) as tar_ref:
+                
+            with tarfile.open(file_path, mode) as tar_ref:
                 tar_ref.extractall(extract_dir)
-        
-        elif archive_format == "7z":
-            try:
+        elif format in ["7z", "rar"]:
+            # Use py7zr for 7z files
+            if format == "7z":
                 import py7zr
-                
-                with py7zr.SevenZipFile(archive_path, mode='r') as z:
+                with py7zr.SevenZipFile(file_path, mode='r') as z:
                     z.extractall(extract_dir)
-            
-            except ImportError:
-                raise Exception("py7zr library is required for 7z extraction")
-        
-        elif archive_format == "rar":
-            try:
+            # Use unrar for rar files
+            elif format == "rar":
                 import rarfile
-                
-                with rarfile.RarFile(archive_path) as rf:
+                with rarfile.RarFile(file_path) as rf:
                     rf.extractall(extract_dir)
-            
-            except ImportError:
-                raise Exception("rarfile library is required for RAR extraction")
-        
-        else:
-            raise ValueError(f"Unsupported archive format for extraction: {archive_format}")
-    
-    async def _create_archive(self, source_dir: str, archive_path: str, archive_format: str) -> None:
-        """Create an archive from a directory"""
-        if archive_format == "zip":
-            with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zip_ref:
+                    
+    def _create_archive(self, source_dir: str, output_path: str, format: str) -> None:
+        """Create an archive from a directory (efficient non-blocking implementation)"""
+        if format == "zip":
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zip_ref:
                 for root, _, files in os.walk(source_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
                         arcname = os.path.relpath(file_path, source_dir)
                         zip_ref.write(file_path, arcname)
-        
-        elif archive_format == "tar":
-            with tarfile.open(archive_path, "w") as tar_ref:
-                for root, _, files in os.walk(source_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source_dir)
-                        tar_ref.add(file_path, arcname=arcname)
-        
-        elif archive_format == "gz":
-            with tarfile.open(archive_path, "w:gz") as tar_ref:
-                for root, _, files in os.walk(source_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source_dir)
-                        tar_ref.add(file_path, arcname=arcname)
-        
-        elif archive_format == "bz2":
-            with tarfile.open(archive_path, "w:bz2") as tar_ref:
-                for root, _, files in os.walk(source_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source_dir)
-                        tar_ref.add(file_path, arcname=arcname)
-        
-        elif archive_format == "xz":
-            with tarfile.open(archive_path, "w:xz") as tar_ref:
-                for root, _, files in os.walk(source_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source_dir)
-                        tar_ref.add(file_path, arcname=arcname)
-        
-        elif archive_format == "7z":
-            try:
-                import py7zr
+        elif format in ["tar", "gz", "bz2", "xz"]:
+            mode = "w"
+            if format == "gz":
+                mode = "w:gz"
+            elif format == "bz2":
+                mode = "w:bz2"
+            elif format == "xz":
+                mode = "w:xz"
                 
-                with py7zr.SevenZipFile(archive_path, 'w') as z:
-                    for root, _, files in os.walk(source_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, source_dir)
-                            z.write(file_path, arcname)
-            
-            except ImportError:
-                raise Exception("py7zr library is required for 7z creation")
-        
-        else:
-            raise ValueError(f"Unsupported archive format for creation: {archive_format}") 
+            with tarfile.open(output_path, mode) as tar_ref:
+                tar_ref.add(source_dir, arcname="")
+        elif format == "7z":
+            import py7zr
+            with py7zr.SevenZipFile(output_path, mode='w') as z:
+                z.writeall(source_dir, arcname="") 

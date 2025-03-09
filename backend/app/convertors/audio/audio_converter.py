@@ -2,6 +2,7 @@ import os
 import asyncio
 import subprocess
 from typing import List, Optional
+import aiofiles
 
 from app.utils.base_converter import BaseConverter
 
@@ -50,7 +51,7 @@ class AudioConverter(BaseConverter):
         except Exception as e:
             # Fallback to direct ffmpeg if pydub fails
             try:
-                await self._convert_with_ffmpeg(file_path, output_path)
+                await self._convert_with_ffmpeg(file_path, output_path, target_format)
             except Exception as ffmpeg_error:
                 raise Exception(f"Audio conversion failed: {str(e)}. FFmpeg fallback also failed: {str(ffmpeg_error)}")
         
@@ -66,75 +67,23 @@ class AudioConverter(BaseConverter):
     
     # Helper methods
     
-    async def _convert_with_pydub(self, input_path: str, output_path: str, target_format: str) -> None:
-        """Convert audio using pydub"""
-        try:
-            from pydub import AudioSegment
-            
-            # Load the audio file
-            audio = AudioSegment.from_file(input_path)
-            
-            # Set export parameters based on target format
-            export_params = {}
-            
-            if target_format == "mp3":
-                export_params = {
-                    "format": "mp3",
-                    "bitrate": "192k",
-                    "codec": "libmp3lame"
-                }
-            elif target_format == "wav":
-                export_params = {
-                    "format": "wav",
-                    "codec": "pcm_s16le"
-                }
-            elif target_format == "ogg":
-                export_params = {
-                    "format": "ogg",
-                    "codec": "libvorbis",
-                    "bitrate": "192k"
-                }
-            elif target_format == "flac":
-                export_params = {
-                    "format": "flac",
-                    "codec": "flac"
-                }
-            elif target_format == "aac":
-                export_params = {
-                    "format": "adts",
-                    "codec": "aac",
-                    "bitrate": "192k"
-                }
-            elif target_format == "m4a":
-                export_params = {
-                    "format": "ipod",
-                    "codec": "aac",
-                    "bitrate": "192k"
-                }
-            
-            # Export the audio file
-            audio.export(output_path, **export_params)
+    async def _convert_with_pydub(self, file_path: str, output_path: str, target_format: str):
+        """Convert audio using pydub and ffmpeg"""
+        from pydub import AudioSegment
         
-        except ImportError:
-            raise Exception("pydub library is required for audio conversion")
+        # Load the audio file
+        audio = AudioSegment.from_file(file_path)
+        
+        # Export the audio file to the target format
+        async with aiofiles.open(output_path, "wb") as f:
+            audio.export(f, format=target_format)
     
-    async def _convert_with_ffmpeg(self, input_path: str, output_path: str) -> None:
+    async def _convert_with_ffmpeg(self, file_path: str, output_path: str, target_format: str):
         """Convert audio using ffmpeg directly"""
-        try:
-            # Run ffmpeg command
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-i", input_path,
-                "-y",  # Overwrite output file if it exists
-                output_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise Exception(f"FFmpeg error: {stderr.decode()}")
-        
-        except (FileNotFoundError, subprocess.SubprocessError):
-            raise Exception("FFmpeg is required for audio conversion") 
+        command = [
+            "ffmpeg",
+            "-i", file_path,
+            output_path
+        ]
+        process = await asyncio.create_subprocess_exec(*command)
+        await process.communicate() 

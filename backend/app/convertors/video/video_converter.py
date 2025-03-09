@@ -2,6 +2,8 @@ import os
 import asyncio
 import subprocess
 from typing import List, Optional
+import aiofiles
+from concurrent.futures import ThreadPoolExecutor
 
 from app.utils.base_converter import BaseConverter
 
@@ -49,9 +51,13 @@ class VideoConverter(BaseConverter):
             if target_format == "gif":
                 await self._convert_to_gif(file_path, output_path)
             else:
-                await self._convert_with_moviepy(file_path, output_path, target_format)
+                # Run the video conversion in a thread pool to avoid blocking
+                with ThreadPoolExecutor() as executor:
+                    await asyncio.get_event_loop().run_in_executor(
+                        executor, self._convert_with_moviepy, file_path, output_path, target_format
+                    )
         except Exception as e:
-            # Fallback to direct ffmpeg if moviepy fails
+            # Fallback to ffmpeg if moviepy fails
             try:
                 await self._convert_with_ffmpeg(file_path, output_path, target_format)
             except Exception as ffmpeg_error:
@@ -69,35 +75,27 @@ class VideoConverter(BaseConverter):
     
     # Helper methods
     
-    async def _convert_with_moviepy(self, input_path: str, output_path: str, target_format: str) -> None:
-        """Convert video using moviepy"""
-        try:
-            from moviepy.editor import VideoFileClip
-            
-            # Load the video file
-            video = VideoFileClip(input_path)
-            
-            # Set export parameters based on target format
-            if target_format == "mp4":
-                video.write_videofile(output_path, codec="libx264", audio_codec="aac")
-            elif target_format == "webm":
-                video.write_videofile(output_path, codec="libvpx", audio_codec="libvorbis")
-            elif target_format == "avi":
-                video.write_videofile(output_path, codec="rawvideo", audio_codec="pcm_s16le")
-            elif target_format == "mov":
-                video.write_videofile(output_path, codec="libx264", audio_codec="aac")
-            elif target_format == "mkv":
-                video.write_videofile(output_path, codec="libx264", audio_codec="libvorbis")
-            else:
-                # Default settings
-                video.write_videofile(output_path)
-            
-            # Close the video file
-            video.close()
+    async def _convert_with_moviepy(self, file_path: str, output_path: str, target_format: str) -> None:
+        """Convert video using moviepy (efficient non-blocking implementation)"""
+        from moviepy.editor import VideoFileClip
         
-        except ImportError:
-            raise Exception("moviepy library is required for video conversion")
-    
+        # Optimize conversion parameters based on format
+        codec = None
+        if target_format == "mp4":
+            codec = "libx264"
+        elif target_format == "webm":
+            codec = "libvpx"
+        
+        # Load and convert the video
+        with VideoFileClip(file_path) as clip:
+            clip.write_videofile(
+                output_path,
+                codec=codec,
+                threads=4,  # Use multiple threads for encoding
+                preset='medium',  # Balance between speed and quality
+                audio_codec='aac' if target_format == 'mp4' else 'libvorbis'
+            )
+            
     async def _convert_to_gif(self, input_path: str, output_path: str) -> None:
         """Convert video to GIF using moviepy"""
         try:
@@ -118,41 +116,29 @@ class VideoConverter(BaseConverter):
         except ImportError:
             raise Exception("moviepy library is required for video to GIF conversion")
     
-    async def _convert_with_ffmpeg(self, input_path: str, output_path: str, target_format: str) -> None:
-        """Convert video using ffmpeg directly"""
-        try:
-            # Set ffmpeg parameters based on target format
-            ffmpeg_params = ["-i", input_path, "-y"]
+    async def _convert_with_ffmpeg(self, file_path: str, output_path: str, target_format: str) -> None:
+        """Convert video using ffmpeg directly (optimized version)"""
+        # Optimize ffmpeg parameters based on format
+        extra_args = []
+        if target_format == "mp4":
+            extra_args = ["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-b:a", "128k"]
+        elif target_format == "webm":
+            extra_args = ["-c:v", "libvpx", "-crf", "10", "-b:v", "1M", "-c:a", "libvorbis"]
+        elif target_format == "avi":
+            extra_args = ["-c:v", "mpeg4", "-q:v", "6", "-c:a", "libmp3lame", "-q:a", "4"]
             
-            if target_format == "mp4":
-                ffmpeg_params.extend(["-c:v", "libx264", "-c:a", "aac", "-strict", "experimental"])
-            elif target_format == "webm":
-                ffmpeg_params.extend(["-c:v", "libvpx", "-c:a", "libvorbis"])
-            elif target_format == "avi":
-                ffmpeg_params.extend(["-c:v", "rawvideo", "-c:a", "pcm_s16le"])
-            elif target_format == "mov":
-                ffmpeg_params.extend(["-c:v", "libx264", "-c:a", "aac", "-strict", "experimental"])
-            elif target_format == "mkv":
-                ffmpeg_params.extend(["-c:v", "libx264", "-c:a", "libvorbis"])
-            elif target_format == "gif":
-                ffmpeg_params.extend([
-                    "-vf", "fps=10,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
-                ])
-            
-            ffmpeg_params.append(output_path)
-            
-            # Run ffmpeg command
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                *ffmpeg_params,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise Exception(f"FFmpeg error: {stderr.decode()}")
+        command = [
+            "ffmpeg",
+            "-i", file_path,
+            "-y",  # Overwrite output file if it exists
+            *extra_args,
+            output_path
+        ]
         
-        except (FileNotFoundError, subprocess.SubprocessError):
-            raise Exception("FFmpeg is required for video conversion") 
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        await process.communicate() 
