@@ -12,9 +12,14 @@ import {
   Container,
   useMediaQuery,
   useTheme,
+  Avatar,
+  Tooltip,
+  Divider
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import AccountCircleIcon from '@mui/icons-material/AccountCircle';
+import { useAuth } from '../contexts/AuthContext';
 
 const conversionTypes = [
   { name: 'Text', path: '/convert/text' },
@@ -28,8 +33,10 @@ const conversionTypes = [
 function Header() {
   const [anchorElNav, setAnchorElNav] = useState(null);
   const [anchorElConvert, setAnchorElConvert] = useState(null);
+  const [anchorElUser, setAnchorElUser] = useState(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const { currentUser, logout } = useAuth();
 
   const handleOpenNavMenu = (event) => {
     setAnchorElNav(event.currentTarget);
@@ -39,12 +46,29 @@ function Header() {
     setAnchorElConvert(event.currentTarget);
   };
 
+  const handleOpenUserMenu = (event) => {
+    setAnchorElUser(event.currentTarget);
+  };
+
   const handleCloseNavMenu = () => {
     setAnchorElNav(null);
   };
 
   const handleCloseConvertMenu = () => {
     setAnchorElConvert(null);
+  };
+
+  const handleCloseUserMenu = () => {
+    setAnchorElUser(null);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      handleCloseUserMenu();
+    } catch (error) {
+      console.error('Failed to log out', error);
+    }
   };
 
   return (
@@ -185,6 +209,63 @@ function Header() {
             >
               About
             </Button>
+          </Box>
+
+          {/* User menu */}
+          <Box sx={{ flexGrow: 0 }}>
+            {currentUser ? (
+              <>
+                <Tooltip title="Open settings">
+                  <IconButton onClick={handleOpenUserMenu} sx={{ p: 0 }}>
+                    <Avatar alt={currentUser.displayName || 'User'} src={currentUser.photoURL}>
+                      {!currentUser.photoURL && <AccountCircleIcon />}
+                    </Avatar>
+                  </IconButton>
+                </Tooltip>
+                <Menu
+                  sx={{ mt: '45px' }}
+                  id="menu-appbar"
+                  anchorEl={anchorElUser}
+                  anchorOrigin={{
+                    vertical: 'top',
+                    horizontal: 'right',
+                  }}
+                  keepMounted
+                  transformOrigin={{
+                    vertical: 'top',
+                    horizontal: 'right',
+                  }}
+                  open={Boolean(anchorElUser)}
+                  onClose={handleCloseUserMenu}
+                >
+                  <MenuItem component={RouterLink} to="/profile" onClick={handleCloseUserMenu}>
+                    <Typography textAlign="center">Profile</Typography>
+                  </MenuItem>
+                  <Divider />
+                  <MenuItem onClick={handleLogout}>
+                    <Typography textAlign="center">Logout</Typography>
+                  </MenuItem>
+                </Menu>
+              </>
+            ) : (
+              <Button
+                component={RouterLink}
+                to="/login"
+                variant="outlined"
+                sx={{ 
+                  my: 1, 
+                  color: 'white', 
+                  display: 'block',
+                  borderColor: 'white',
+                  '&:hover': {
+                    borderColor: 'white',
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  }
+                }}
+              >
+                Sign In
+              </Button>
+            )}
           </Box>
         </Toolbar>
       </Container>
