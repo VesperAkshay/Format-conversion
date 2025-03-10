@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import FileResponse
 import os
 import uuid
@@ -12,6 +12,7 @@ import hashlib
 from pydantic import BaseModel, EmailStr
 
 from app.utils.conversion_handler import ConversionHandler
+from app.utils.file_manager import FileManager
 from app.utils.email_service import email_service
 from app.tasks import convert_file_task, cleanup_old_files
 
@@ -22,6 +23,9 @@ router = APIRouter(
 
 # Initialize the conversion handler
 conversion_handler = ConversionHandler()
+
+# Initialize the file manager
+file_manager = FileManager()
 
 # In-memory cache for conversion results
 conversion_cache: Dict[str, str] = {}
@@ -35,6 +39,12 @@ class ShareFileRequest(BaseModel):
     recipient_email: EmailStr
     message: Optional[str] = None
 
+# Optional dependency for user ID (can be expanded with actual auth)
+async def get_user_id(request: Request) -> Optional[str]:
+    """Get the user ID from the request, if available"""
+    # This is a placeholder - in a real app, you'd get this from auth
+    return request.headers.get("X-User-ID")
+
 @router.post("/file")
 async def convert_file(
     request: Request,
@@ -42,6 +52,7 @@ async def convert_file(
     file: UploadFile = File(...),
     target_format: str = Form(...),
     conversion_type: str = Form(...),
+    user_id: Optional[str] = Depends(get_user_id),
 ):
     """
     Convert a file to the specified format.
@@ -54,58 +65,44 @@ async def convert_file(
     Returns:
         A JSON response with the path to the converted file
     """
-    # Generate a unique filename to avoid collisions
-    original_filename = file.filename
-    filename_without_ext = os.path.splitext(original_filename)[0]
-    unique_id = str(uuid.uuid4())
-    
-    # Save the uploaded file
-    upload_folder = os.path.join("uploads", conversion_type)
-    os.makedirs(upload_folder, exist_ok=True)
-    
-    file_location = os.path.join(upload_folder, f"{filename_without_ext}_{unique_id}{os.path.splitext(original_filename)[1]}")
-    
-    # Generate a cache key for this conversion
-    file_content = await file.read(1024 * 1024)  # Read first MB for hash
-    await file.seek(0)  # Reset file position
-    
-    hash_obj = hashlib.md5()
-    hash_obj.update(file_content)
-    hash_obj.update(target_format.encode())
-    hash_obj.update(conversion_type.encode())
-    cache_key = hash_obj.hexdigest()
-    
-    # Check Redis cache
-    redis_client = request.app.state.redis
-    cached_result = redis_client.get(f"conversion:{cache_key}")
-    
-    if cached_result:
-        cached_path = cached_result.decode('utf-8')
-        if os.path.exists(cached_path):
-            return {
-                "success": True,
-                "message": "File converted successfully (cached)",
-                "file_path": cached_path,
-                "download_url": f"/outputs/{os.path.basename(cached_path)}"
-            }
-    
-    # Save the uploaded file asynchronously
-    async with aiofiles.open(file_location, "wb") as buffer:
-        # Use chunks to handle large files efficiently
-        chunk_size = 1024 * 1024  # 1MB chunks
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-            await buffer.write(chunk)
-    
     try:
+        # Save the uploaded file using the file manager
+        file_path, file_hash, unique_id = await file_manager.save_uploaded_file(
+            file=file,
+            conversion_type=conversion_type,
+            user_id=user_id
+        )
+        
+        # Generate a cache key for this conversion
+        cache_key = f"{file_hash}:{target_format}:{conversion_type}"
+        
+        # Check Redis cache
+        redis_client = request.app.state.redis
+        cached_result = redis_client.get(f"conversion:{cache_key}")
+        
+        if cached_result:
+            cached_path = cached_result.decode('utf-8')
+            if os.path.exists(cached_path):
+                download_url = file_manager.get_file_url(cached_path)
+                return {
+                    "success": True,
+                    "message": "File converted successfully (cached)",
+                    "file_path": cached_path,
+                    "download_url": download_url
+                }
+        
+        # Get the output path for the converted file
+        output_filename = os.path.basename(file.filename)
+        
         # Submit the conversion task to Celery
         task = convert_file_task.delay(
-            file_path=file_location,
+            file_path=file_path,
             target_format=target_format,
             conversion_type=conversion_type,
-            output_filename=f"{filename_without_ext}_{unique_id}"
+            output_filename=output_filename,
+            file_hash=file_hash,
+            unique_id=unique_id,
+            user_id=user_id
         )
         
         # Wait for the task to complete (with a timeout)
@@ -119,19 +116,22 @@ async def convert_file(
         )
         
         # Schedule file cleanup after response is sent
-        background_tasks.add_task(cleanup_files, file_location, output_path, delay=3600)  # Clean up after 1 hour
+        background_tasks.add_task(cleanup_files, file_path, output_path, delay=3600)  # Clean up after 1 hour
+        
+        # Get the download URL
+        download_url = file_manager.get_file_url(output_path)
         
         return {
             "success": True,
             "message": "File converted successfully",
             "file_path": output_path,
-            "download_url": f"/outputs/{os.path.basename(output_path)}"
+            "download_url": download_url
         }
     
     except Exception as e:
         # Clean up the uploaded file if conversion fails
-        if os.path.exists(file_location):
-            os.remove(file_location)
+        if 'file_path' in locals() and os.path.exists(file_path):
+            os.remove(file_path)
         
         raise HTTPException(
             status_code=500,
@@ -144,6 +144,7 @@ async def convert_file_async(
     file: UploadFile = File(...),
     target_format: str = Form(...),
     conversion_type: str = Form(...),
+    user_id: Optional[str] = Depends(get_user_id),
 ):
     """
     Convert a file asynchronously and return a task ID.
@@ -156,34 +157,26 @@ async def convert_file_async(
     Returns:
         A JSON response with the task ID
     """
-    # Generate a unique filename to avoid collisions
-    original_filename = file.filename
-    filename_without_ext = os.path.splitext(original_filename)[0]
-    unique_id = str(uuid.uuid4())
-    
-    # Save the uploaded file
-    upload_folder = os.path.join("uploads", conversion_type)
-    os.makedirs(upload_folder, exist_ok=True)
-    
-    file_location = os.path.join(upload_folder, f"{filename_without_ext}_{unique_id}{os.path.splitext(original_filename)[1]}")
-    
-    # Save the uploaded file asynchronously
-    async with aiofiles.open(file_location, "wb") as buffer:
-        # Use chunks to handle large files efficiently
-        chunk_size = 1024 * 1024  # 1MB chunks
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-            await buffer.write(chunk)
-    
     try:
+        # Save the uploaded file using the file manager
+        file_path, file_hash, unique_id = await file_manager.save_uploaded_file(
+            file=file,
+            conversion_type=conversion_type,
+            user_id=user_id
+        )
+        
+        # Get the output filename
+        output_filename = os.path.basename(file.filename)
+        
         # Submit the conversion task to Celery
         task = convert_file_task.delay(
-            file_path=file_location,
+            file_path=file_path,
             target_format=target_format,
             conversion_type=conversion_type,
-            output_filename=f"{filename_without_ext}_{unique_id}"
+            output_filename=output_filename,
+            file_hash=file_hash,
+            unique_id=unique_id,
+            user_id=user_id
         )
         
         return {
@@ -195,8 +188,8 @@ async def convert_file_async(
     
     except Exception as e:
         # Clean up the uploaded file if task submission fails
-        if os.path.exists(file_location):
-            os.remove(file_location)
+        if 'file_path' in locals() and os.path.exists(file_path):
+            os.remove(file_path)
         
         raise HTTPException(
             status_code=500,
@@ -266,18 +259,20 @@ async def download_file(filename: str):
     Returns:
         The file as a response
     """
-    file_path = os.path.join("outputs", filename)
+    # First check in outputs directory
+    output_path = os.path.join("outputs", filename)
+    if os.path.exists(output_path):
+        return FileResponse(output_path, filename=filename)
     
-    if not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=404,
-            detail="File not found"
-        )
+    # Then check in uploads directory
+    upload_path = os.path.join("uploads", filename)
+    if os.path.exists(upload_path):
+        return FileResponse(upload_path, filename=filename)
     
-    return FileResponse(
-        path=file_path,
-        filename=filename,
-        media_type="application/octet-stream"
+    # If file not found, raise 404
+    raise HTTPException(
+        status_code=404,
+        detail=f"File not found: {filename}"
     )
 
 @router.get("/supported-formats")
@@ -333,20 +328,25 @@ async def share_file_via_email(request: ShareFileRequest):
 
 async def cleanup_files(file_path: str, output_path: str, delay: int = 3600):
     """
-    Clean up temporary files after a delay.
+    Clean up files after a delay.
     
     Args:
-        file_path: Path to the uploaded file
-        output_path: Path to the converted file
-        delay: Delay in seconds before cleanup (default: 1 hour)
+        file_path: Path to the input file
+        output_path: Path to the output file
+        delay: Delay in seconds before cleaning up
     """
-    import asyncio
-    
     await asyncio.sleep(delay)
     
-    # Remove the files if they exist
+    # Remove the input file if it exists
     if os.path.exists(file_path):
-        os.remove(file_path)
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
     
+    # Remove the output file if it exists
     if os.path.exists(output_path):
-        os.remove(output_path) 
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass 

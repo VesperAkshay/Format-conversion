@@ -4,9 +4,11 @@ import shutil
 import asyncio
 from datetime import datetime, timedelta
 from celery.utils.log import get_task_logger
+from typing import Optional
 
 from app.celery_worker import celery
 from app.utils.conversion_handler import ConversionHandler
+from app.utils.file_manager import FileManager
 
 # Initialize logger
 logger = get_task_logger(__name__)
@@ -14,8 +16,19 @@ logger = get_task_logger(__name__)
 # Initialize conversion handler
 conversion_handler = ConversionHandler()
 
+# Initialize file manager
+file_manager = FileManager()
+
 @celery.task(name="convert_file_task")
-def convert_file_task(file_path, target_format, conversion_type, output_filename=None):
+def convert_file_task(
+    file_path: str, 
+    target_format: str, 
+    conversion_type: str, 
+    output_filename: str,
+    file_hash: str,
+    unique_id: str,
+    user_id: Optional[str] = None
+):
     """
     Celery task to convert a file to the specified format.
     
@@ -23,7 +36,10 @@ def convert_file_task(file_path, target_format, conversion_type, output_filename
         file_path: Path to the file to convert
         target_format: Format to convert to
         conversion_type: Type of conversion
-        output_filename: Optional custom filename for the output file
+        output_filename: Custom filename for the output file
+        file_hash: Hash of the input file for deduplication
+        unique_id: Unique ID for the conversion
+        user_id: Optional user ID for user-based directories
         
     Returns:
         Path to the converted file
@@ -36,15 +52,45 @@ def convert_file_task(file_path, target_format, conversion_type, output_filename
     asyncio.set_event_loop(loop)
     
     try:
-        # Perform the conversion
-        output_path = loop.run_until_complete(
-            conversion_handler.convert_file(
-                file_path=file_path,
-                target_format=target_format,
-                conversion_type=conversion_type,
-                output_filename=output_filename
-            )
+        # Get the output path
+        output_path = file_manager.get_output_path(
+            original_filename=output_filename,
+            target_format=target_format,
+            file_hash=file_hash,
+            unique_id=unique_id,
+            user_id=user_id
         )
+        
+        # Create the output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Perform the conversion
+        try:
+            # Use the full output path as the output_filename to ensure correct path
+            result_path = loop.run_until_complete(
+                conversion_handler.convert_file(
+                    file_path=file_path,
+                    target_format=target_format,
+                    conversion_type=conversion_type,
+                    output_filename=output_path
+                )
+            )
+            
+            # If the result path is different from the expected output path,
+            # move the file to the correct location
+            if result_path != output_path and os.path.exists(result_path):
+                # Ensure the target directory exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                
+                # Move the file
+                shutil.move(result_path, output_path)
+                logger.info(f"Moved file from {result_path} to {output_path}")
+                
+                # Use the correct output path
+                result_path = output_path
+        except Exception as e:
+            logger.error(f"Conversion error: {str(e)}")
+            raise
         
         end_time = time.time()
         logger.info(f"Conversion completed in {end_time - start_time:.2f} seconds")

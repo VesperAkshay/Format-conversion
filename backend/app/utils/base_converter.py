@@ -87,10 +87,25 @@ class BaseConverter(ABC):
             Path to the output file
         """
         if output_filename:
-            base_name = output_filename
+            # Check if output_filename already contains a directory path
+            if os.path.dirname(output_filename):
+                # If it has a directory component, use it as is
+                output_dir = os.path.dirname(output_filename)
+                base_name = os.path.basename(output_filename)
+                
+                # Create the directory if it doesn't exist
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Return the full path with the target format extension
+                return os.path.join(output_dir, f"{base_name}.{target_format}")
+            else:
+                # If it's just a filename, use it with the default outputs directory
+                base_name = output_filename
         else:
+            # Use the input filename if no output filename is provided
             base_name = os.path.splitext(os.path.basename(input_path))[0]
         
+        # Return the path in the outputs directory
         return os.path.join("outputs", f"{base_name}.{target_format}")
     
     def _validate_formats(self, input_format: str, target_format: str) -> None:

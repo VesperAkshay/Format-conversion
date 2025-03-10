@@ -8,10 +8,14 @@ import redis
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from app.routers import conversion_router
+from app.utils.file_manager import FileManager
+
+# Initialize file manager
+file_manager = FileManager()
 
 # Create upload and output directories if they don't exist
-os.makedirs("uploads", exist_ok=True)
-os.makedirs("outputs", exist_ok=True)
+os.makedirs(file_manager.base_upload_dir, exist_ok=True)
+os.makedirs(file_manager.base_output_dir, exist_ok=True)
 
 # Determine optimal number of workers based on CPU cores
 cpu_count = multiprocessing.cpu_count()
@@ -48,8 +52,8 @@ async def add_process_time_header(request, call_next):
     return response
 
 # Mount static files directories
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
+app.mount("/uploads", StaticFiles(directory=file_manager.base_upload_dir), name="uploads")
+app.mount("/outputs", StaticFiles(directory=file_manager.base_output_dir), name="outputs")
 
 # Include routers
 app.include_router(conversion_router.router)
@@ -83,6 +87,7 @@ async def startup_event():
     app.state.thread_pool = thread_pool
     app.state.process_pool = process_pool
     app.state.redis = redis_client
+    app.state.file_manager = file_manager
     print(f"Server started with {thread_workers} thread workers and {process_workers} process workers")
 
 # Shutdown the thread and process pools when the application stops
