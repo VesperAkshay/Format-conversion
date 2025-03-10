@@ -62,4 +62,34 @@ export const convertFile = async (file, targetFormat, conversionType) => {
  */
 export const getDownloadUrl = (filename) => {
   return `${API_URL}/download/${filename}`;
+};
+
+/**
+ * Share a file via email
+ * @param {string} filename - The name of the file to share
+ * @param {string} recipientEmail - The email address of the recipient
+ * @param {string} message - Optional message to include in the email
+ * @returns {Promise<Object>} Object containing information about the sharing result
+ */
+export const shareFile = async (filename, recipientEmail, message = '') => {
+  try {
+    const response = await axios.post(`${API_URL}/share`, {
+      filename,
+      recipient_email: recipientEmail,
+      message
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Error sharing file:', error);
+    
+    if (error.response) {
+      const errorMessage = error.response.data?.detail || 'Failed to share file';
+      throw new Error(errorMessage);
+    } else if (error.request) {
+      throw new Error('No response from server. Please check your connection.');
+    } else {
+      throw new Error('Error setting up the share request');
+    }
+  }
 }; 

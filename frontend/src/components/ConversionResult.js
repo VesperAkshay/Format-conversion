@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
@@ -16,7 +16,13 @@ import {
   CardContent,
   IconButton,
   Tooltip,
-  LinearProgress
+  LinearProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Snackbar
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -24,21 +30,98 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ShareIcon from '@mui/icons-material/Share';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import ReplayIcon from '@mui/icons-material/Replay';
+import EmailIcon from '@mui/icons-material/Email';
+import CloseIcon from '@mui/icons-material/Close';
 import { useNavigate } from 'react-router-dom';
+import { shareFile } from '../services/api';
 
 function ConversionResult({ result, loading, error, typeColor }) {
   const theme = useTheme();
   const navigate = useNavigate();
   
+  // State for share dialog
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [shareMessage, setShareMessage] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [sharing, setSharing] = useState(false);
+  
+  // State for notifications
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [snackbarSeverity, setSnackbarSeverity] = useState('success');
+  
   const handleCopyLink = () => {
     if (result?.download_url) {
       navigator.clipboard.writeText(window.location.origin + result.download_url);
+      showNotification('Link copied to clipboard', 'success');
     }
   };
   
   const handleNewConversion = () => {
     // Refresh the page to start a new conversion
     window.location.reload();
+  };
+  
+  const handleShareDialogOpen = () => {
+    setShareDialogOpen(true);
+  };
+  
+  const handleShareDialogClose = () => {
+    setShareDialogOpen(false);
+    setRecipientEmail('');
+    setShareMessage('');
+    setEmailError('');
+  };
+  
+  const validateEmail = (email) => {
+    const re = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    return re.test(String(email).toLowerCase());
+  };
+  
+  const handleShareFile = async () => {
+    // Validate email
+    if (!recipientEmail) {
+      setEmailError('Email is required');
+      return;
+    }
+    
+    if (!validateEmail(recipientEmail)) {
+      setEmailError('Please enter a valid email address');
+      return;
+    }
+    
+    setEmailError('');
+    setSharing(true);
+    
+    try {
+      // Extract filename from path
+      const fileName = result.file_path.split('/').pop();
+      
+      // Call API to share file
+      const response = await shareFile(fileName, recipientEmail, shareMessage);
+      
+      // Show success notification
+      showNotification('File shared successfully', 'success');
+      
+      // Close dialog
+      handleShareDialogClose();
+    } catch (error) {
+      console.error('Error sharing file:', error);
+      showNotification(error.message || 'Failed to share file', 'error');
+    } finally {
+      setSharing(false);
+    }
+  };
+  
+  const showNotification = (message, severity = 'success') => {
+    setSnackbarMessage(message);
+    setSnackbarSeverity(severity);
+    setSnackbarOpen(true);
+  };
+  
+  const handleSnackbarClose = () => {
+    setSnackbarOpen(false);
   };
 
   if (loading) {
@@ -302,8 +385,9 @@ function ConversionResult({ result, loading, error, typeColor }) {
                 </IconButton>
               </Tooltip>
               
-              <Tooltip title="Share file">
+              <Tooltip title="Share file via email">
                 <IconButton 
+                  onClick={handleShareDialogOpen}
                   sx={{ 
                     border: '1px solid',
                     borderColor: 'divider',
@@ -342,6 +426,150 @@ function ConversionResult({ result, loading, error, typeColor }) {
           Convert Another File
         </Button>
       </Box>
+      
+      {/* Share Dialog */}
+      <Dialog 
+        open={shareDialogOpen} 
+        onClose={handleShareDialogClose}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            p: 1
+          }
+        }}
+      >
+        <DialogTitle sx={{ pb: 1 }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <EmailIcon color="primary" />
+            <Typography variant="h6" component="div" fontWeight={600}>
+              Share File via Email
+            </Typography>
+          </Stack>
+        </DialogTitle>
+        <IconButton
+          aria-label="close"
+          onClick={handleShareDialogClose}
+          sx={{
+            position: 'absolute',
+            right: 16,
+            top: 16,
+            color: 'text.secondary',
+          }}
+        >
+          <CloseIcon />
+        </IconButton>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" paragraph>
+            Share the converted file "{fileName}" with someone via email.
+          </Typography>
+          
+          <TextField
+            autoFocus
+            margin="dense"
+            id="recipient-email"
+            label="Recipient Email"
+            type="email"
+            fullWidth
+            variant="outlined"
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.target.value)}
+            error={!!emailError}
+            helperText={emailError}
+            required
+            sx={{
+              mb: 3,
+              '& .MuiOutlinedInput-root': {
+                '& fieldset': {
+                  borderWidth: 1.5,
+                },
+                '&:hover fieldset': {
+                  borderWidth: 1.5,
+                },
+                '&.Mui-focused fieldset': {
+                  borderWidth: 1.5,
+                },
+              },
+            }}
+          />
+          
+          <TextField
+            margin="dense"
+            id="share-message"
+            label="Message (Optional)"
+            multiline
+            rows={4}
+            fullWidth
+            variant="outlined"
+            value={shareMessage}
+            onChange={(e) => setShareMessage(e.target.value)}
+            placeholder="Add a personal message to include in the email..."
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                '& fieldset': {
+                  borderWidth: 1.5,
+                },
+                '&:hover fieldset': {
+                  borderWidth: 1.5,
+                },
+                '&.Mui-focused fieldset': {
+                  borderWidth: 1.5,
+                },
+              },
+            }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button 
+            onClick={handleShareDialogClose}
+            variant="outlined"
+            sx={{ 
+              borderRadius: 2,
+              borderWidth: 1.5,
+              px: 3,
+              '&:hover': {
+                borderWidth: 1.5,
+              }
+            }}
+          >
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleShareFile}
+            variant="contained"
+            disabled={sharing}
+            startIcon={sharing ? <CircularProgress size={20} /> : <EmailIcon />}
+            sx={{ 
+              borderRadius: 2,
+              px: 3,
+              boxShadow: '0 4px 14px 0 rgba(58, 134, 255, 0.2)',
+              '&:hover': {
+                boxShadow: '0 6px 20px rgba(58, 134, 255, 0.3)',
+              }
+            }}
+          >
+            {sharing ? 'Sending...' : 'Send Email'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      
+      {/* Notification Snackbar */}
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={6000}
+        onClose={handleSnackbarClose}
+        message={snackbarMessage}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={handleSnackbarClose} 
+          severity={snackbarSeverity} 
+          sx={{ width: '100%', borderRadius: 2 }}
+        >
+          {snackbarMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

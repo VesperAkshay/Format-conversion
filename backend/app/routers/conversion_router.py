@@ -9,8 +9,10 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future
 import aiofiles
 import time
 import hashlib
+from pydantic import BaseModel, EmailStr
 
 from app.utils.conversion_handler import ConversionHandler
+from app.utils.email_service import email_service
 from app.tasks import convert_file_task, cleanup_old_files
 
 router = APIRouter(
@@ -26,6 +28,12 @@ conversion_cache: Dict[str, str] = {}
 
 # Track active conversions to prevent duplicates
 active_conversions: Dict[str, Future] = {}
+
+# Define the email sharing request model
+class ShareFileRequest(BaseModel):
+    filename: str
+    recipient_email: EmailStr
+    message: Optional[str] = None
 
 @router.post("/file")
 async def convert_file(
@@ -281,6 +289,47 @@ async def get_supported_formats():
         A JSON response with supported formats for each conversion type
     """
     return conversion_handler.get_supported_formats()
+
+@router.post("/share")
+async def share_file_via_email(request: ShareFileRequest):
+    """
+    Share a converted file via email using SendGrid.
+    
+    Args:
+        request: ShareFileRequest containing filename, recipient email, and optional message
+        
+    Returns:
+        dict: Response indicating success or failure
+    """
+    try:
+        # Construct the file path
+        file_path = os.path.join("outputs", request.filename)
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Send email with file attachment
+        result = await email_service.send_file_sharing_email(
+            recipient_email=request.recipient_email,
+            file_path=file_path,
+            file_name=request.filename,
+            sender_message=request.message
+        )
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["message"])
+        
+        return {
+            "success": True,
+            "message": "File shared successfully",
+            "details": result
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to share file: {str(e)}")
 
 async def cleanup_files(file_path: str, output_path: str, delay: int = 3600):
     """
