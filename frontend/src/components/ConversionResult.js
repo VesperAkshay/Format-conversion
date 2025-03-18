@@ -94,8 +94,18 @@ function ConversionResult({ result, loading, error, typeColor }) {
     setSharing(true);
     
     try {
-      // Extract filename from path
-      const fileName = result.file_path.split('/').pop();
+      // Extract filename from path - handle both /outputs/path/file.ext and full URL formats
+      let fileName = result.file_path;
+      
+      // Remove any query parameters
+      fileName = fileName.split('?')[0];
+      
+      // Extract just the filename from the path
+      if (fileName.includes('/')) {
+        fileName = fileName.split('/').pop();
+      }
+      
+      console.log('Sharing file:', fileName);
       
       // Call API to share file
       const response = await shareFile(fileName, recipientEmail, shareMessage);

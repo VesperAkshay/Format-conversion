@@ -10,6 +10,7 @@ import aiofiles
 import time
 import hashlib
 from pydantic import BaseModel, EmailStr
+from datetime import datetime
 
 from app.utils.conversion_handler import ConversionHandler
 from app.utils.file_manager import FileManager
@@ -297,18 +298,38 @@ async def share_file_via_email(request: ShareFileRequest):
         dict: Response indicating success or failure
     """
     try:
-        # Construct the file path
-        file_path = os.path.join("outputs", request.filename)
+        # Extract the filename from the path if it contains slashes
+        filename = request.filename.split('/')[-1]
         
-        # Check if file exists
+        # First try to find the file directly in the outputs directory
+        file_path = os.path.join("outputs", filename)
+        
+        # If file doesn't exist, try to search for it in subdirectories
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File not found")
+            # Get current date for directory structure
+            today = datetime.now()
+            year_month_day = f"{today.year}/{today.month:02d}/{today.day:02d}"
+            
+            # Try date-based directory structure
+            date_based_path = os.path.join("outputs", year_month_day, filename)
+            if os.path.exists(date_based_path):
+                file_path = date_based_path
+            else:
+                # Try to find the file in any subdirectory of outputs
+                for root, dirs, files in os.walk("outputs"):
+                    if filename in files:
+                        file_path = os.path.join(root, filename)
+                        break
+        
+        # Check if file exists after all attempts
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
         
         # Send email with file attachment
         result = await email_service.send_file_sharing_email(
             recipient_email=request.recipient_email,
             file_path=file_path,
-            file_name=request.filename,
+            file_name=filename,
             sender_message=request.message
         )
         
