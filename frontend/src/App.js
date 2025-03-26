@@ -5,6 +5,7 @@ import Header from './components/Header';
 import Footer from './components/Footer';
 import HomePage from './pages/HomePage';
 import ConversionPage from './pages/ConversionPage';
+import ChatBot from './components/ui/ChatBot';
 
 import AboutPage from './pages/AboutPage';
 import ApiPage from './pages/ApiPage';
@@ -41,6 +42,7 @@ function App() {
           </Routes>
         </Container>
         <Footer />
+        <ChatBot />
       </div>
     </AuthProvider>
   );

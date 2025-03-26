@@ -7,7 +7,7 @@ import multiprocessing
 import redis
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from app.routers import conversion_router
+from app.routers import conversion_router, chat_router
 from app.utils.file_manager import FileManager
 
 # Initialize file manager
@@ -57,6 +57,7 @@ app.mount("/outputs", StaticFiles(directory=file_manager.base_output_dir), name=
 
 # Include routers
 app.include_router(conversion_router.router)
+app.include_router(chat_router.router)
 
 @app.get("/")
 async def root():

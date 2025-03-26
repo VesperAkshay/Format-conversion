@@ -1,20 +1,71 @@
-# Format Conversion Application
+# Format Conversion with Groq AI Chatbot
 
-A powerful application for converting files between various formats, built with FastAPI, React, Redis, and Celery.
+This project is a file format conversion web application that includes a Groq AI-powered chatbot to assist users.
 
 ## Features
 
-- Convert between various file formats:
-  - Text: TXT, MD, HTML, XML, JSON, CSV, YAML, etc.
-  - Documents: PDF, DOCX, TXT, HTML, MD, etc.
-  - Images: JPG, PNG, GIF, BMP, TIFF, WEBP, SVG, etc.
-  - Audio: MP3, WAV, OGG, FLAC, AAC, etc.
-  - Video: MP4, AVI, MKV, MOV, WEBM, GIF, etc.
-  - Compressed Files: ZIP, TAR, GZ, 7Z, etc.
-- Modern, responsive UI with animations
-- Asynchronous processing with Celery
-- Caching with Redis for improved performance
-- Dockerized deployment for easy setup
+- Convert between various file formats (documents, images, audio, video, etc.)
+- User authentication and profile management
+- Groq AI-powered chatbot for assistance with file conversions
+
+## Chatbot Integration
+
+The application includes a powerful conversational AI assistant powered by Groq. The chatbot can:
+
+- Help users understand file conversion options
+- Answer questions about supported formats
+- Provide assistance with conversion tasks
+- Guide users through the application
+
+## Setup Instructions
+
+### Prerequisites
+
+- Node.js and npm for the frontend
+- Python 3.8+ for the backend
+- [Groq API key](https://console.groq.com/) for the chatbot
+
+### Configuration
+
+1. Clone the repository
+2. Set up the backend:
+   ```
+   cd backend
+   pip install -r requirements.txt
+   ```
+3. Add your Groq API key to the `.env` file:
+   ```
+   GROQ_API_KEY=your_groq_api_key_here
+   ```
+4. Start the backend:
+   ```
+   uvicorn app.main:app --reload
+   ```
+5. Set up the frontend:
+   ```
+   cd frontend
+   npm install
+   ```
+6. Start the frontend:
+   ```
+   npm start
+   ```
+
+## Chatbot Usage
+
+The chatbot is available from any page in the application by clicking the chat button in the bottom-right corner. Users can:
+
+- Ask questions about file conversion
+- Get help with specific conversion tasks
+- Adjust AI model settings (temperature, model selection)
+- Use conversation starters for common questions
+
+## Technologies Used
+
+- **Frontend**: React, Material UI
+- **Backend**: FastAPI, Python
+- **AI**: Groq API (LLaMA, Mixtral models)
+- **Authentication**: Firebase Authentication
 
 ## Architecture
 
