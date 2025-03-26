@@ -19,7 +19,15 @@ import {
   Stack,
   Tooltip,
   Zoom,
-  Chip
+  Chip,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Alert,
+  AlertTitle,
+  Link
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import CloseIcon from '@mui/icons-material/Close';
@@ -28,7 +36,10 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import PersonIcon from '@mui/icons-material/Person';
 import TuneIcon from '@mui/icons-material/Tune';
 import LanguageIcon from '@mui/icons-material/Language';
-import { sendChatMessage, getSupportedChatModels } from '../../services/chatService';
+import FileUploadIcon from '@mui/icons-material/FileUpload';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import DownloadIcon from '@mui/icons-material/Download';
+import { sendChatMessage, getSupportedChatModels, convertFileFromChat } from '../../services/chatService';
 import { useAuth } from '../../contexts/AuthContext';
 
 // Predefined conversation starters by language
@@ -97,7 +108,17 @@ const ChatBot = () => {
   const [selectedModel, setSelectedModel] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [language, setLanguage] = useState('en');
+  
+  // New state for handling conversions
+  const [conversionIntent, setConversionIntent] = useState(null);
+  const [showFileUpload, setShowFileUpload] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [conversionResult, setConversionResult] = useState(null);
+  const [conversionError, setConversionError] = useState('');
+  const [showConversionResult, setShowConversionResult] = useState(false);
+  
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
   const { currentUser } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -212,6 +233,13 @@ const ChatBot = () => {
   const handleSendMessage = async () => {
     if (input.trim() === '') return;
     
+    // Clear any pending conversions if user sends a new message
+    if (showFileUpload) {
+      setShowFileUpload(false);
+      setSelectedFile(null);
+      setConversionIntent(null);
+    }
+    
     // Add user message
     const userMessage = { role: 'user', content: input };
     setMessages(prevMessages => [...prevMessages, userMessage]);
@@ -224,7 +252,21 @@ const ChatBot = () => {
         // System message with language instruction
         { 
           role: 'system', 
-          content: `You are a helpful assistant for a file format conversion website. Help users understand how to convert files, what formats are supported, and provide advice about file conversions. Please respond in ${languages.find(l => l.code === language)?.name || 'English'}. Be friendly, concise, and helpful.` 
+          content: `You are a helpful assistant for a file format conversion website. 
+Your primary job is to help users convert files between different formats.
+
+When users express intent to convert files (e.g., "convert PDF to DOCX" or "I need to change this MP3 to WAV"), 
+respond acknowledging their request and explaining that they'll need to upload a file.
+
+Supported conversion types include:
+- Documents: PDF, DOCX, ODT, RTF, TXT, EPUB
+- Images: JPG/JPEG, PNG, GIF, BMP, TIFF, WEBP, SVG, ICO
+- Audio: MP3, WAV, AAC, FLAC, OGG, M4A
+- Video: MP4, AVI, MOV, MKV, WEBM, FLV
+- Archives: ZIP, RAR, TAR, 7Z, GZ
+- Text: CSV, JSON, XML, YAML, HTML, MD
+
+Please respond in ${languages.find(l => l.code === language)?.name || 'English'}. Be friendly, concise, and helpful.` 
         },
         // Previous messages
         ...messages,
@@ -249,6 +291,13 @@ const ChatBot = () => {
         ...prevMessages, 
         { role: 'assistant', content: response.response }
       ]);
+
+      // Check if there's a conversion action
+      if (response.action && response.action.type === 'conversion_intent') {
+        setConversionIntent(response.action.data);
+        setShowFileUpload(true);
+      }
+      
     } catch (error) {
       console.error('Chat error:', error);
       // Handle different types of errors
@@ -382,7 +431,226 @@ const ChatBot = () => {
       default: return 'Type your message...';
     }
   };
-  
+
+  // Handle file selection
+  const handleFileSelect = (e) => {
+    if (e.target.files.length > 0) {
+      setSelectedFile(e.target.files[0]);
+    }
+  };
+
+  // Handle drag events
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (e.dataTransfer.files.length > 0) {
+      setSelectedFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Trigger file input click
+  const handleFileButtonClick = () => {
+    fileInputRef.current.click();
+  };
+
+  // Handle file conversion
+  const handleConvertFile = async () => {
+    if (!selectedFile || !conversionIntent) return;
+    
+    try {
+      setLoading(true);
+      setConversionError('');
+      
+      const result = await convertFileFromChat(
+        selectedFile,
+        conversionIntent.conversion_type,
+        conversionIntent.target_format,
+        messages[messages.length - 2].content // User's message that triggered conversion
+      );
+      
+      setConversionResult(result);
+      setShowConversionResult(true);
+      setShowFileUpload(false);
+      
+      // Add a success message to the chat
+      setMessages(prevMessages => [
+        ...prevMessages,
+        { 
+          role: 'assistant', 
+          content: language === 'es' ? 
+            `¡Conversión completada! He convertido tu archivo a formato ${conversionIntent.target_format.toUpperCase()}. Puedes descargarlo usando el botón de descarga.` :
+            language === 'fr' ? 
+            `Conversion terminée ! J'ai converti votre fichier au format ${conversionIntent.target_format.toUpperCase()}. Vous pouvez le télécharger en utilisant le bouton de téléchargement.` :
+            language === 'de' ? 
+            `Konvertierung abgeschlossen! Ich habe Ihre Datei in das Format ${conversionIntent.target_format.toUpperCase()} konvertiert. Sie können sie mit der Schaltfläche "Herunterladen" herunterladen.` :
+            `Conversion complete! I've converted your file to ${conversionIntent.target_format.toUpperCase()} format. You can download it using the download button.`
+        }
+      ]);
+      
+    } catch (error) {
+      console.error('Error converting file:', error);
+      
+      // Format the error message for better readability
+      let errorMessage = error.message || 'Failed to convert file';
+      
+      // Check if error contains technical details and extract the main message
+      if (errorMessage.includes('Conversion failed:')) {
+        // Extract the more specific part of the error message
+        errorMessage = errorMessage.split('Conversion failed:')[1].trim();
+      }
+      
+      setConversionError(errorMessage);
+      
+      // Add error message to chat - more user-friendly version
+      const userFriendlyMessage = 
+        language === 'es' ? 
+          `Lo siento, no pude convertir tu archivo. ${getErrorHint(error.message, language)}` :
+        language === 'fr' ? 
+          `Désolé, je n'ai pas pu convertir votre fichier. ${getErrorHint(error.message, language)}` :
+        language === 'de' ? 
+          `Entschuldigung, ich konnte Ihre Datei nicht konvertieren. ${getErrorHint(error.message, language)}` :
+          `Sorry, I couldn't convert your file. ${getErrorHint(error.message, language)}`;
+      
+      setMessages(prevMessages => [
+        ...prevMessages,
+        { role: 'assistant', content: userFriendlyMessage }
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Helper function to provide more helpful hints based on error messages
+  const getErrorHint = (errorMsg, lang) => {
+    const lowerError = (errorMsg || '').toLowerCase();
+    
+    // Default messages by language
+    const hintMap = {
+      en: {
+        default: "Please try again with a different file.",
+        format: "The file format might not be supported for this conversion.",
+        size: "The file might be too large. Try a smaller file.",
+        corrupted: "The file might be corrupted or not a valid image file.",
+        server: "There was a server issue. Please try again later."
+      },
+      es: {
+        default: "Por favor, intenta con un archivo diferente.",
+        format: "Es posible que el formato de archivo no sea compatible con esta conversión.",
+        size: "El archivo podría ser demasiado grande. Intenta con un archivo más pequeño.",
+        corrupted: "El archivo podría estar dañado o no ser un archivo de imagen válido.",
+        server: "Hubo un problema con el servidor. Por favor, inténtalo más tarde."
+      },
+      fr: {
+        default: "Veuillez réessayer avec un fichier différent.",
+        format: "Le format du fichier pourrait ne pas être pris en charge pour cette conversion.",
+        size: "Le fichier est peut-être trop volumineux. Essayez un fichier plus petit.",
+        corrupted: "Le fichier pourrait être corrompu ou ne pas être un fichier image valide.",
+        server: "Il y a eu un problème avec le serveur. Veuillez réessayer plus tard."
+      },
+      de: {
+        default: "Bitte versuchen Sie es mit einer anderen Datei.",
+        format: "Das Dateiformat wird möglicherweise für diese Konvertierung nicht unterstützt.",
+        size: "Die Datei ist möglicherweise zu groß. Versuchen Sie es mit einer kleineren Datei.",
+        corrupted: "Die Datei ist möglicherweise beschädigt oder keine gültige Bilddatei.",
+        server: "Es gab ein Problem mit dem Server. Bitte versuchen Sie es später erneut."
+      }
+    };
+    
+    // Select language or default to English
+    const hints = hintMap[lang] || hintMap.en;
+    
+    // Determine hint based on error message
+    if (lowerError.includes('format') || lowerError.includes('unsupported')) {
+      return hints.format;
+    } else if (lowerError.includes('size') || lowerError.includes('too large')) {
+      return hints.size;
+    } else if (lowerError.includes('corrupt') || lowerError.includes('invalid')) {
+      return hints.corrupted;
+    } else if (lowerError.includes('server') || lowerError.includes('unavailable') || lowerError.includes('timeout')) {
+      return hints.server;
+    }
+    
+    return hints.default;
+  };
+
+  // Handle cancel conversion
+  const handleCancelConversion = () => {
+    setShowFileUpload(false);
+    setSelectedFile(null);
+    setConversionIntent(null);
+  };
+
+  // Handle close conversion result
+  const handleCloseConversionResult = () => {
+    setShowConversionResult(false);
+  };
+
+  const renderConversationStarters = () => {
+    if (messages.length > 1) return null; // Only show starters at the beginning
+    
+    const starters = [
+      {
+        en: "What file formats can I convert?",
+        es: "¿Qué formatos de archivo puedo convertir?",
+        fr: "Quels formats de fichiers puis-je convertir?",
+        de: "Welche Dateiformate kann ich konvertieren?"
+      },
+      {
+        en: "How do I convert a PDF to Word?",
+        es: "¿Cómo convierto un PDF a Word?",
+        fr: "Comment convertir un PDF en Word?",
+        de: "Wie konvertiere ich ein PDF in Word?"
+      },
+      {
+        en: "Convert this image to PNG format",
+        es: "Convierte esta imagen a formato PNG",
+        fr: "Convertir cette image au format PNG",
+        de: "Konvertiere dieses Bild in das PNG-Format"
+      },
+      {
+        en: "I need to convert MP3 to WAV",
+        es: "Necesito convertir MP3 a WAV",
+        fr: "J'ai besoin de convertir MP3 en WAV",
+        de: "Ich muss MP3 zu WAV konvertieren"
+      }
+    ];
+    
+    return (
+      <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'center' }}>
+        {starters.map((starter, index) => (
+          <Chip
+            key={index}
+            label={starter[language] || starter.en}
+            onClick={() => {
+              setInput(starter[language] || starter.en);
+              handleSendMessage();
+            }}
+            color="primary"
+            variant="outlined"
+            clickable
+            sx={{ borderRadius: '16px', py: 0.5 }}
+          />
+        ))}
+      </Box>
+    );
+  };
+
   return (
     <>
       {/* Chat button */}
@@ -556,44 +824,10 @@ const ChatBot = () => {
             </Box>
           )}
           
+          {renderConversationStarters()}
+          
           <div ref={messagesEndRef} />
         </Box>
-        
-        {/* Conversation starters */}
-        {messages.length <= 2 && !currentUser && (
-          <Box sx={{ px: 2, pb: 2 }}>
-            <Typography variant="subtitle2" gutterBottom color="text.secondary">
-              {language === 'es' ? 'Prueba a preguntar:' :
-               language === 'fr' ? 'Essayez de demander:' :
-               language === 'de' ? 'Versuchen Sie zu fragen:' :
-               language === 'it' ? 'Prova a chiedere:' :
-               language === 'pt' ? 'Tente perguntar:' :
-               language === 'ru' ? 'Попробуйте спросить:' :
-               language === 'zh' ? '尝试询问:' :
-               language === 'ja' ? '質問してみてください:' :
-               language === 'ko' ? '질문해 보세요:' :
-               language === 'ar' ? 'حاول أن تسأل:' :
-               language === 'hi' ? 'पूछने का प्रयास करें:' :
-               'Try asking:'}
-            </Typography>
-            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-              {conversationStarters.map((starter, index) => (
-                <Chip
-                  key={index}
-                  label={starter}
-                  onClick={() => handleStarterClick(starter)}
-                  sx={{ 
-                    my: 0.5, 
-                    cursor: 'pointer',
-                    bgcolor: 'grey.100'
-                  }}
-                />
-              ))}
-            </Stack>
-          </Box>
-        )}
-        
-        <Divider />
         
         {/* Input area */}
         <Box
@@ -630,6 +864,25 @@ const ChatBot = () => {
               {loading ? <CircularProgress size={24} /> : <SendIcon />}
             </IconButton>
           </Box>
+          
+          {/* Show conversion result button when available */}
+          {conversionResult && (
+            <Box sx={{ mt: 2, textAlign: 'center' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={() => setShowConversionResult(true)}
+                sx={{ borderRadius: '20px' }}
+              >
+                {language === 'es' ? 'Ver archivo convertido' :
+                 language === 'fr' ? 'Voir le fichier converti' :
+                 language === 'de' ? 'Konvertierte Datei anzeigen' :
+                 'View Converted File'}
+              </Button>
+            </Box>
+          )}
+          
           <Typography
             variant="caption"
             color="text.secondary"
@@ -639,6 +892,197 @@ const ChatBot = () => {
           </Typography>
         </Box>
       </Drawer>
+      
+      {/* File Upload Dialog */}
+      <Dialog open={showFileUpload} onClose={handleCancelConversion} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          {language === 'es' ? 'Subir archivo para conversión' :
+           language === 'fr' ? 'Télécharger un fichier pour conversion' :
+           language === 'de' ? 'Datei für Konvertierung hochladen' :
+           'Upload File for Conversion'}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ my: 2 }}>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <AlertTitle>
+                {language === 'es' ? 'Conversión detectada' :
+                 language === 'fr' ? 'Conversion détectée' :
+                 language === 'de' ? 'Konvertierung erkannt' :
+                 'Conversion Detected'}
+              </AlertTitle>
+              {language === 'es' ? `Conversión de archivo a formato ${conversionIntent?.target_format.toUpperCase()}` :
+               language === 'fr' ? `Conversion de fichier au format ${conversionIntent?.target_format.toUpperCase()}` :
+               language === 'de' ? `Dateikonvertierung zum Format ${conversionIntent?.target_format.toUpperCase()}` :
+               `File conversion to ${conversionIntent?.target_format.toUpperCase()} format`}
+            </Alert>
+            
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+            
+            <Box 
+              sx={{ 
+                border: '2px dashed',
+                borderColor: 'divider',
+                borderRadius: 2,
+                p: 3,
+                textAlign: 'center',
+                mb: 2,
+                cursor: 'pointer'
+              }}
+              onClick={handleFileButtonClick}
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {selectedFile ? (
+                <>
+                  <Typography variant="subtitle1" gutterBottom>
+                    {selectedFile.name}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {(selectedFile.size / 1024).toFixed(1)} KB
+                  </Typography>
+                </>
+              ) : (
+                <>
+                  <FileUploadIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
+                  <Typography variant="subtitle1" gutterBottom>
+                    {language === 'es' ? 'Haz clic para seleccionar un archivo' :
+                     language === 'fr' ? 'Cliquez pour sélectionner un fichier' :
+                     language === 'de' ? 'Klicken Sie, um eine Datei auszuwählen' :
+                     'Click to select a file'}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {language === 'es' ? 'O arrastra y suelta aquí' :
+                     language === 'fr' ? 'Ou glisser-déposer ici' :
+                     language === 'de' ? 'Oder hierher ziehen und ablegen' :
+                     'Or drag and drop here'}
+                  </Typography>
+                </>
+              )}
+            </Box>
+            
+            {conversionError && (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {conversionError}
+              </Alert>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelConversion}>
+            {language === 'es' ? 'Cancelar' :
+             language === 'fr' ? 'Annuler' :
+             language === 'de' ? 'Abbrechen' :
+             'Cancel'}
+          </Button>
+          <Button 
+            variant="contained" 
+            onClick={handleConvertFile} 
+            disabled={!selectedFile || loading}
+            startIcon={loading ? <CircularProgress size={20} /> : <AttachFileIcon />}
+          >
+            {loading ? 
+              (language === 'es' ? 'Convirtiendo...' :
+               language === 'fr' ? 'Conversion en cours...' :
+               language === 'de' ? 'Konvertierung...' :
+               'Converting...') :
+              (language === 'es' ? 'Convertir archivo' :
+               language === 'fr' ? 'Convertir le fichier' :
+               language === 'de' ? 'Datei konvertieren' :
+               'Convert File')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      
+      {/* Conversion Result Dialog */}
+      <Dialog open={showConversionResult} onClose={handleCloseConversionResult} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {language === 'es' ? 'Resultado de la conversión' :
+           language === 'fr' ? 'Résultat de la conversion' :
+           language === 'de' ? 'Konvertierungsergebnis' :
+           'Conversion Result'}
+        </DialogTitle>
+        <DialogContent>
+          {conversionResult && (
+            <Box sx={{ my: 2 }}>
+              <Alert severity="success" sx={{ mb: 3 }}>
+                <AlertTitle>
+                  {language === 'es' ? '¡Conversión completada!' :
+                   language === 'fr' ? 'Conversion terminée !' :
+                   language === 'de' ? 'Konvertierung abgeschlossen!' :
+                   'Conversion Complete!'}
+                </AlertTitle>
+                {language === 'es' ? 'Su archivo se ha convertido correctamente.' :
+                 language === 'fr' ? 'Votre fichier a été converti avec succès.' :
+                 language === 'de' ? 'Ihre Datei wurde erfolgreich konvertiert.' :
+                 'Your file has been successfully converted.'}
+              </Alert>
+              
+              <Paper elevation={1} sx={{ p: 3, borderRadius: 2, mb: 2 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  {language === 'es' ? 'Detalles del archivo:' :
+                   language === 'fr' ? 'Détails du fichier :' :
+                   language === 'de' ? 'Dateidetails:' :
+                   'File Details:'}
+                </Typography>
+                
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 120 }}>
+                    {language === 'es' ? 'Formato:' :
+                     language === 'fr' ? 'Format :' :
+                     language === 'de' ? 'Format:' :
+                     'Format:'}
+                  </Typography>
+                  <Typography variant="body2">
+                    {conversionIntent?.target_format.toUpperCase()}
+                  </Typography>
+                </Box>
+                
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 120 }}>
+                    {language === 'es' ? 'Ruta:' :
+                     language === 'fr' ? 'Chemin :' :
+                     language === 'de' ? 'Pfad:' :
+                     'Path:'}
+                  </Typography>
+                  <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
+                    {conversionResult.file_path}
+                  </Typography>
+                </Box>
+                
+                <Button
+                  variant="contained"
+                  startIcon={<DownloadIcon />}
+                  component="a"
+                  href={conversionResult.download_url}
+                  target="_blank"
+                  download
+                  fullWidth
+                >
+                  {language === 'es' ? 'Descargar archivo convertido' :
+                   language === 'fr' ? 'Télécharger le fichier converti' :
+                   language === 'de' ? 'Konvertierte Datei herunterladen' :
+                   'Download Converted File'}
+                </Button>
+              </Paper>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseConversionResult}>
+            {language === 'es' ? 'Cerrar' :
+             language === 'fr' ? 'Fermer' :
+             language === 'de' ? 'Schließen' :
+             'Close'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };
