@@ -5,28 +5,28 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     libpq-dev \
     ffmpeg \
     poppler-utils \
     tesseract-ocr \
     libreoffice \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Install uv and move to PATH
+RUN curl -Ls https://astral.sh/uv/install.sh | bash && \
+    cp /root/.local/bin/* /usr/local/bin/
+
+# Copy requirements and install using uv
 COPY requirements.txt .
+RUN uv pip install --system -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy app code
 COPY . .
 
-# Create necessary directories
+# Create folders
 RUN mkdir -p uploads outputs shared_data
 
-# Expose port
 EXPOSE 8000
 
-# Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
